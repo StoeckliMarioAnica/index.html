@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wetterkarte · Temperatur und Luftdruck</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.6.1/dist/maplibre-gl.css"
+    integrity="sha256-eSrJl9z2rm9kPrTi3uRjDIXnBWUmvY+4X/6Dxn1sQbQ=" crossorigin="anonymous">
+  <style>
+    :root {
+      font: 16px/1.5 system-ui, sans-serif;
+      color: #172e3e;
+      background: #edf3f5;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    main { width: min(96rem, 100%); margin: auto; padding: 1.5rem clamp(0.75rem, 3vw, 2.5rem); }
+    .eyebrow {
+      color: #136c6a;
+      font-size: .73rem;
+      font-weight: 750;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+    }
+    h1 { margin: .12em 0; font-size: clamp(2rem, 4vw, 3rem); line-height: 1.1; letter-spacing: -.05em; }
+    header p { margin: .5rem 0 1.2rem; color: #475f6d; }
+    .frame { background: white; border: 1px solid #d5e0e5; border-radius: 1rem; overflow: hidden; }
+    .toolbar, .legend {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: .55rem 1rem;
+      padding: .8rem 1rem;
+    }
+    .switcher { display: flex; padding: .2rem; border-radius: .65rem; background: #e9f1f3; }
+    button {
+      border: 0;
+      border-radius: .5rem;
+      padding: .38rem .72rem;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      font-size: .875rem;
+      font-weight: 650;
+      cursor: pointer;
+    }
+    button[aria-pressed="true"], #retry { background: #173c4b; color: white; }
+    :focus-visible { outline: 3px solid #007b79; outline-offset: 3px; }
+    .status-line { display: flex; align-items: center; gap: .5rem; color: #475f6d; font-size: .85rem; }
+    #map { height: clamp(20rem, 65vh, 58rem); background: #dce8ed; }
+    .legend { border-top: 1px solid #d5e0e5; justify-content: flex-start; font-size: .85rem; }
+    .scale { width: min(100%, 22rem); }
+    .scale-bar { height: .55rem; border-radius: 1rem; }
+    .scale-ticks { display: flex; justify-content: space-between; gap: .25rem; margin-top: .2rem; color: #475f6d; }
+    footer { margin-top: .7rem; font-size: .82rem; color: #475f6d; }
+    footer a { color: #136361; }
+    .weather-marker { display: grid; place-items: center; }
+    .weather-label {
+      border: 2px solid white;
+      border-radius: 1rem;
+      padding: .1rem .42rem;
+      box-shadow: 0 1px 5px #172e3e70;
+      color: white;
+      white-space: nowrap;
+      font: 700 .77rem/1.5 system-ui, sans-serif;
+      font-variant-numeric: tabular-nums;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="eyebrow">Aktuelle Wetterdaten</div>
+      <h1>Wetterkarte</h1>
+      <p>Verschiebe die Karte oder zoome, um das Wetter im sichtbaren Ausschnitt zu erkunden.</p>
+    </header>
+    <section class="frame" aria-label="Interaktive Wetterkarte">
+      <div class="toolbar">
+        <div class="switcher" role="group" aria-label="Wetterwert wählen">
+          <button type="button" data-metric="temperature_2m" aria-pressed="true">Temperatur</button>
+          <button type="button" data-metric="pressure_msl" aria-pressed="false">Luftdruck</button>
+        </div>
+        <div class="status-line">
+          <span id="status" role="status">Karte wird geladen …</span>
+          <button type="button" id="retry" hidden>Erneut laden</button>
+        </div>
+      </div>
+      <div id="map" aria-label="Karte mit Wetterwerten als Rasterpunkte"></div>
+      <div class="legend" id="basemap-status" role="status" hidden></div>
+      <div class="legend">
+        <strong id="legend-title">Temperatur (°C)</strong>
+        <div class="scale">
+          <div class="scale-bar" id="scale-bar" aria-hidden="true"></div>
+          <div class="scale-ticks" id="scale-ticks"></div>
+        </div>
+      </div>
+    </section>
+    <footer>Wetterdaten: <a href="https://open-meteo.com/">Open-Meteo</a> · Modellwerte, keine Stationsmessungen</footer>
+  </main>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/maplibre-gl@5.6.1/dist/maplibre-gl.js"
+    integrity="sha256-taNOaTD/k327ue7IiSz/uAukc8zoiuXKjEZUQy9fDrw=" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.1.3/leaflet-maplibre-gl.js"
+    integrity="sha256-HDM2eWLndVwaFtH4Vlj9yWtbqjb4Gt/KlJMXTNG1Js4=" crossorigin="anonymous"></script>
+  <script>
+    (() => {
+      const status = document.querySelector('#status');
+      if (!window.L) {
+        status.textContent = 'Leaflet konnte nicht geladen werden. Prüfe die Internetverbindung und lade die Seite neu.';
+        return;
+      }
+
+      const metrics = {
+        temperature_2m: {
+          title: 'Temperatur', unit: '°C',
+          stops: [[-20, '#2347aa'], [-5, '#176caa'], [10, '#16745c'], [25, '#a84a09'], [40, '#b32132']]
+        },
+        pressure_msl: {
+          title: 'Luftdruck auf Meereshöhe', unit: 'hPa',
+          stops: [[970, '#3c3b93'], [990, '#1d5899'], [1010, '#126956'], [1030, '#876015'], [1050, '#944017']]
+        }
+      };
+      const DEBOUNCE_MS = 450;
+      const ENDPOINT = 'https://api.open-meteo.com/v1/forecast';
+      const formatNumber = new Intl.NumberFormat('de-DE', { maximumFractionDigits: 1, useGrouping: false });
+      const formatTime = new Intl.DateTimeFormat('de-DE', { dateStyle: 'short', timeStyle: 'short', timeZone: 'UTC' });
+      const buttons = document.querySelectorAll('[data-metric]');
+      const retry = document.querySelector('#retry');
+      const legendTitle = document.querySelector('#legend-title');
+      const scaleBar = document.querySelector('#scale-bar');
+      const scaleTicks = document.querySelector('#scale-ticks');
+      const map = L.map('map', { minZoom: 3, maxZoom: 19 }).setView([47.2, 8.15], 7);
+      const basemapStatus = document.querySelector('#basemap-status');
+      function showBasemapError(error) {
+        console.error('OpenFreeMap:', error);
+        basemapStatus.textContent = 'Die Hintergrundkarte konnte nicht vollständig geladen werden. Die Wetterdaten werden separat geladen.';
+        basemapStatus.hidden = false;
+      }
+      try {
+        if (!window.maplibregl || !L.maplibreGL) throw new Error('MapLibre konnte nicht geladen werden.');
+        const basemap = L.maplibreGL({
+          style: 'https://tiles.openfreemap.org/styles/liberty',
+          attributionControl: false
+        }).addTo(map);
+        map.attributionControl.addAttribution(
+          '<a href="https://openfreemap.org/">OpenFreeMap</a> · &copy; ' +
+          '<a href="https://www.openmaptiles.org/">OpenMapTiles</a> · &copy; ' +
+          '<a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+        );
+        basemap.getMaplibreMap().on('error', event => showBasemapError(event.error));
+      } catch (error) {
+        showBasemapError(error);
+      }
+      const layer = L.layerGroup().addTo(map);
+      let metric = 'temperature_2m';
+      let samples = [];
+      let timer;
+      let activeRequest;
+
+      function visibleGrid() {
+        const { x: width, y: height } = map.getSize();
+        const columns = Math.max(1, Math.min(7, Math.floor(width / 110)));
+        const rows = Math.max(1, Math.min(5, Math.floor(height / 85)));
+        const points = [];
+        for (let row = 0; row < rows; row++) {
+          for (let column = 0; column < columns; column++) {
+            const point = map.containerPointToLatLng([
+              (column + .5) * width / columns, (row + .5) * height / rows
+            ]);
+            // Leaflet repeats the world horizontally; API coordinates must be wrapped.
+            if (Math.abs(point.lat) > 85.05112878) continue;
+            points.push({
+              point,
+              latitude: point.lat.toFixed(5),
+              longitude: point.wrap().lng.toFixed(5)
+            });
+          }
+        }
+        return points;
+      }
+
+      function colorFor(value, stops) {
+        const index = stops.findIndex(([limit]) => value <= limit);
+        if (index === 0) return stops[0][1];
+        if (index < 0) return stops.at(-1)[1];
+        const [start, colorA] = stops[index - 1];
+        const [end, colorB] = stops[index];
+        const fraction = (value - start) / (end - start);
+        const channels = [1, 3, 5].map(offset => {
+          const a = parseInt(colorA.slice(offset, offset + 2), 16);
+          const b = parseInt(colorB.slice(offset, offset + 2), 16);
+          return Math.round(a + (b - a) * fraction);
+        });
+        return `rgb(${channels.join(', ')})`;
+      }
+
+      function render() {
+        const { title, unit, stops } = metrics[metric];
+        legendTitle.textContent = `${title} (${unit})`;
+        scaleBar.style.background = `linear-gradient(to right, ${stops.map(([, color]) => color).join(', ')})`;
+        scaleTicks.replaceChildren(...stops.map(([value], index) => {
+          const tick = document.createElement('span');
+          const bound = index === 0 ? '≤ ' : index === stops.length - 1 ? '≥ ' : '';
+          tick.textContent = bound + formatNumber.format(value);
+          return tick;
+        }));
+        layer.clearLayers();
+        for (const { point, weather } of samples) {
+          const value = weather?.[metric];
+          const label = document.createElement('span');
+          label.className = 'weather-label';
+          label.textContent = Number.isFinite(value) ? `${formatNumber.format(value)} ${unit}` : 'k. A.';
+          label.style.backgroundColor = Number.isFinite(value) ? colorFor(value, stops) : '#475f6d';
+          const details = document.createElement('div');
+          for (const [key, config] of Object.entries(metrics)) {
+            const line = document.createElement('div');
+            const reading = weather?.[key];
+            line.textContent = `${config.title}: ${Number.isFinite(reading) ? `${formatNumber.format(reading)} ${config.unit}` : 'keine Angabe'}`;
+            details.append(line);
+          }
+          L.marker(point, {
+            title: `${title}: ${label.textContent}`,
+            icon: L.divIcon({ className: 'weather-marker', html: label, iconSize: [92, 26] })
+          }).bindPopup(details).addTo(layer);
+        }
+      }
+
+      function cancelUpdate() {
+        clearTimeout(timer);
+        activeRequest?.abort();
+        activeRequest = undefined;
+      }
+
+      function scheduleUpdate() {
+        cancelUpdate();
+        timer = setTimeout(loadWeather, DEBOUNCE_MS);
+      }
+
+      async function loadWeather() {
+        cancelUpdate();
+        retry.hidden = true;
+        samples = [];
+        render();
+        const points = visibleGrid();
+        if (!points.length) {
+          status.textContent = 'Keine Rasterpunkte in diesem Kartenausschnitt.';
+          return;
+        }
+
+        const controller = new AbortController();
+        activeRequest = controller;
+        const timeout = setTimeout(() => controller.abort(), 12000);
+        status.textContent = 'Wetterdaten werden geladen …';
+
+        try {
+          const query = new URLSearchParams({
+            latitude: points.map(point => point.latitude).join(','),
+            longitude: points.map(point => point.longitude).join(','),
+            current: 'temperature_2m,pressure_msl',
+            timezone: 'GMT'
+          });
+          const response = await fetch(`${ENDPOINT}?${query}`, { signal: controller.signal });
+          if (!response.ok) throw new Error(`Open-Meteo: HTTP ${response.status}`);
+          const result = await response.json();
+          if (activeRequest !== controller) return;
+          const locations = Array.isArray(result) ? result : [result];
+          if (locations.length !== points.length) throw new Error('Unerwartete Anzahl Wetterdatensätze');
+          const readings = points.map(({ point }, index) => ({ point, weather: locations[index]?.current }));
+          if (!readings.some(({ weather }) => Object.keys(metrics).some(key => Number.isFinite(weather?.[key])))) {
+            throw new Error('Keine gültigen Wetterwerte');
+          }
+          samples = readings;
+          render();
+          const modelTimes = readings
+            .filter(({ weather }) => typeof weather?.time === 'string')
+            .map(({ weather }) => Date.parse(`${weather.time}Z`))
+            .filter(Number.isFinite);
+          const time = modelTimes.length ? ` · Stand ${formatTime.format(Math.min(...modelTimes))} UTC` : '';
+          status.textContent = `${points.length} ${points.length === 1 ? 'Rasterpunkt' : 'Rasterpunkte'}${time}`;
+        } catch (error) {
+          if (activeRequest !== controller) return;
+          console.error(error);
+          status.textContent = 'Wetterdaten konnten nicht geladen werden.';
+          retry.hidden = false;
+        } finally {
+          clearTimeout(timeout);
+          if (activeRequest === controller) activeRequest = undefined;
+        }
+      }
+
+      for (const button of buttons) {
+        button.addEventListener('click', () => {
+          metric = button.dataset.metric;
+          for (const option of buttons) option.setAttribute('aria-pressed', String(option === button));
+          render();
+        });
+      }
+      retry.addEventListener('click', loadWeather);
+      map.on('movestart zoomstart', cancelUpdate);
+      map.on('moveend resize', scheduleUpdate);
+      loadWeather();
+    })();
+  </script>
+</body>
+</html>
